@@ -41,7 +41,7 @@ app.post('/whatsapp', async (req, res) => {
 
     // Save to Supabase
     const { error } = await supabase
-      .from('appointments')
+      .from('Appointments')
       .insert([{
         name: session.name,
         phone: phone,
