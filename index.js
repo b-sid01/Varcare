@@ -1,40 +1,68 @@
 const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
-// This runs every time a patient sends a WhatsApp message
-app.post('/whatsapp', (req, res) => {
-  const patientMessage = req.body.Body.toLowerCase().trim();
-  const patientNumber = req.body.From;
+// Connect to Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+// Store conversation state per patient
+const sessions = {};
+
+app.post('/whatsapp', async (req, res) => {
+  const msg = req.body.Body.trim();
+  const phone = req.body.From;
+
+  if (!sessions[phone]) sessions[phone] = { step: 'start' };
+  const session = sessions[phone];
 
   let reply = '';
 
-  if (patientMessage === 'hi' || patientMessage === 'hello') {
+  if (session.step === 'start') {
     reply = `Welcome to Dr. Sharma's clinic! 👋\n\nWhat would you like to do?\n\nReply *1* — Book appointment\nReply *2* — Check my appointment\nReply *3* — Cancel appointment`;
+    session.step = 'menu';
   }
-  else if (patientMessage === '1') {
-    reply = `Sure! Let's book your appointment.\n\nWhat is your name?`;
+  else if (session.step === 'menu' && msg === '1') {
+    reply = `Sure! What is your name?`;
+    session.step = 'get_name';
   }
-  else if (patientMessage === '2') {
-    reply = `Let me check your appointment. Please share your registered mobile number.`;
+  else if (session.step === 'get_name') {
+    session.name = msg;
+    reply = `Thanks ${msg}! What date and time would you like? (Example: Tomorrow 3pm)`;
+    session.step = 'get_time';
   }
-  else if (patientMessage === '3') {
-    reply = `To cancel, please share your appointment date and we'll handle it right away.`;
+  else if (session.step === 'get_time') {
+    session.time = msg;
+
+    // Save to Supabase
+    const { error } = await supabase
+      .from('appointments')
+      .insert([{
+        name: session.name,
+        phone: phone,
+        time: session.time
+      }]);
+
+    if (error) {
+      reply = `Something went wrong. Please try again.`;
+    } else {
+      reply = `Appointment requested! ✅\n\nName: ${session.name}\nTime: ${session.time}\n\nDr. Sharma will confirm shortly.`;
+    }
+    sessions[phone] = { step: 'start' };
   }
   else {
-    reply = `Sorry, I didn't understand that. Please reply *Hi* to start again.`;
+    sessions[phone] = { step: 'start' };
+    reply = `Please reply *Hi* to start again.`;
   }
 
-  // Send reply back to patient on WhatsApp
   res.set('Content-Type', 'text/xml');
-  res.send(`
-    <Response>
-      <Message>${reply}</Message>
-    </Response>
-  `);
+  res.send(`<Response><Message>${reply}</Message></Response>`);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Bot is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Varcare bot running on port ${PORT}`));
