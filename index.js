@@ -5,13 +5,11 @@ require('dotenv').config();
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
-// Connect to Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// Store conversation state per patient
 const sessions = {};
 
 app.post('/whatsapp', async (req, res) => {
@@ -24,37 +22,97 @@ app.post('/whatsapp', async (req, res) => {
   let reply = '';
 
   if (session.step === 'start') {
-    reply = `Welcome to Dr. Sharma's clinic! 👋\n\nWhat would you like to do?\n\nReply *1* — Book appointment\nReply *2* — Check my appointment\nReply *3* — Cancel appointment`;
+    reply = `Welcome to Varcare 👋\n\nThis service helps you book appointments with your doctor securely.\n\n⚠️ *Privacy Notice:* By continuing, you agree that your name, phone number, and appointment details will be stored securely and shared only with your doctor. You can request deletion of your data anytime by replying *DELETE*.\n\nReply *1* — Book appointment\nReply *2* — Check my appointment\nReply *3* — Cancel appointment\nReply *PRIVACY* — View privacy policy`;
     session.step = 'menu';
   }
+
+  else if (session.step === 'menu' && msg === 'PRIVACY') {
+    reply = `*Varcare Privacy Policy*\n\n• We collect your name, phone number, and appointment details\n• Your data is shared only with your doctor\n• We never sell your data to third parties\n• You can request data deletion anytime by replying DELETE\n• Data is stored securely on encrypted servers\n• Full policy: https://varcare-dashboard.vercel.app/privacy\n\nReply *1* to book an appointment.`;
+    session.step = 'menu';
+  }
+
+  else if (session.step === 'menu' && msg === 'DELETE') {
+    await supabase.from('Appointments').delete().eq('phone', phone);
+    await supabase.from('patients').delete().eq('phone', phone);
+    reply = `Your data has been deleted from our system. Thank you for using Varcare.`;
+    sessions[phone] = { step: 'start' };
+  }
+
   else if (session.step === 'menu' && msg === '1') {
-    reply = `Sure! What is your name?`;
+    reply = `Sure! What is your full name?`;
     session.step = 'get_name';
   }
+
   else if (session.step === 'get_name') {
     session.name = msg;
-    reply = `Thanks ${msg}! What date and time would you like? (Example: Tomorrow 3pm)`;
+    reply = `Thanks ${msg}! What is your age?`;
+    session.step = 'get_age';
+  }
+
+  else if (session.step === 'get_age') {
+    session.age = msg;
+    reply = `What date and time would you like your appointment?\n\nExample: Tomorrow 3pm or 15 May 10am`;
     session.step = 'get_time';
   }
+
   else if (session.step === 'get_time') {
     session.time = msg;
 
-    // Save to Supabase
     const { error } = await supabase
       .from('Appointments')
       .insert([{
         name: session.name,
         phone: phone,
-        time: session.time
+        time: session.time,
+        age: session.age,
+        consent: true
       }]);
 
     if (error) {
-      reply = `Something went wrong. Please try again.`;
+      reply = `Something went wrong. Please try again by replying *Hi*.`;
     } else {
-      reply = `Appointment requested! ✅\n\nName: ${session.name}\nTime: ${session.time}\n\nDr. Sharma will confirm shortly.`;
+      reply = `✅ Appointment requested!\n\n*Name:* ${session.name}\n*Age:* ${session.age}\n*Time:* ${session.time}\n\nYour doctor will confirm shortly. You will receive a confirmation message once accepted.\n\n_This is a clinic management service. For emergencies please call 112._`;
     }
     sessions[phone] = { step: 'start' };
   }
+
+  else if (session.step === 'menu' && msg === '2') {
+    const { data } = await supabase
+      .from('Appointments')
+      .select('*')
+      .eq('phone', phone)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (data && data.length > 0) {
+      const apt = data[0];
+      reply = `Your latest appointment:\n\n*Name:* ${apt.name}\n*Time:* ${apt.time}\n*Status:* ${apt.status || 'Pending confirmation'}\n\nReply *Hi* to go back to main menu.`;
+    } else {
+      reply = `No appointments found. Reply *1* to book one.`;
+    }
+    session.step = 'menu';
+  }
+
+  else if (session.step === 'menu' && msg === '3') {
+    const { data } = await supabase
+      .from('Appointments')
+      .select('*')
+      .eq('phone', phone)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (data && data.length > 0) {
+      await supabase
+        .from('Appointments')
+        .update({ status: 'cancelled' })
+        .eq('id', data[0].id);
+      reply = `Your appointment for *${data[0].time}* has been cancelled.\n\nReply *1* to book a new appointment.`;
+    } else {
+      reply = `No active appointments found.`;
+    }
+    sessions[phone] = { step: 'start' };
+  }
+
   else {
     sessions[phone] = { step: 'start' };
     reply = `Please reply *Hi* to start again.`;
