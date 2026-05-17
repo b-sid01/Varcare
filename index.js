@@ -15,6 +15,39 @@ const supabase = createClient(
 
 const sessions = {};
 
+function parseDate(input) {
+  const today = new Date();
+  const lower = input.toLowerCase().trim();
+
+  if (lower === 'today') {
+    return today.toISOString().split('T')[0];
+  }
+  if (lower === 'tomorrow') {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  }
+
+  const months = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+  };
+
+  const parts = lower.split(' ');
+  if (parts.length >= 2) {
+    const day = parseInt(parts[0]);
+    const monthStr = parts[1].substring(0, 3);
+    const month = months[monthStr];
+    if (!isNaN(day) && month !== undefined) {
+      const year = today.getFullYear();
+      const date = new Date(year, month, day);
+      return date.toISOString().split('T')[0];
+    }
+  }
+
+  return today.toISOString().split('T')[0];
+}
+
 async function sendWhatsApp(to, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -66,7 +99,14 @@ app.post('/whatsapp', async (req, res) => {
 
   else if (session.step === 'get_age') {
     session.age = msg;
-    reply = `What date and time would you like your appointment?\n\nExample: Tomorrow 3pm or 20 May 10am`;
+    reply = `What date would you like your appointment?\n\nReply with:\n*Today*\n*Tomorrow*\n*20 May*\n*21 May*`;
+    session.step = 'get_date';
+  }
+
+  else if (session.step === 'get_date') {
+    session.date = parseDate(msg);
+    session.dateRaw = msg;
+    reply = `What time would you like?\n\nExample: *10am*, *2pm*, *5:30pm*`;
     session.step = 'get_time';
   }
 
@@ -78,7 +118,8 @@ app.post('/whatsapp', async (req, res) => {
       .insert([{
         name: session.name,
         phone: phone,
-        time: session.time,
+        time: `${session.dateRaw} ${session.time}`,
+        appointment_date: session.date,
         age: session.age,
         consent: true
       }]);
@@ -86,7 +127,7 @@ app.post('/whatsapp', async (req, res) => {
     if (error) {
       reply = `Something went wrong. Please try again by replying Hi.`;
     } else {
-      reply = `Appointment requested\n\nName: ${session.name}\nAge: ${session.age}\nTime: ${session.time}\n\nYour doctor will confirm shortly. You will receive a confirmation message once accepted.\n\nThis is a clinic management service. For emergencies please call 112.`;
+      reply = `Appointment requested\n\nName: ${session.name}\nAge: ${session.age}\nDate: ${session.dateRaw}\nTime: ${session.time}\n\nYour doctor will confirm shortly. You will receive a confirmation message once accepted.\n\nThis is a clinic management service. For emergencies please call 112.`;
     }
     sessions[phone] = { step: 'start' };
   }
@@ -101,7 +142,7 @@ app.post('/whatsapp', async (req, res) => {
 
     if (data && data.length > 0) {
       const apt = data[0];
-      reply = `Your latest appointment:\n\nName: ${apt.name}\nTime: ${apt.time}\nStatus: ${apt.status || 'Pending confirmation'}\n\nReply Hi to go back to main menu.`;
+      reply = `Your latest appointment:\n\nName: ${apt.name}\nDate: ${apt.time}\nStatus: ${apt.status || 'Pending confirmation'}\n\nReply Hi to go back to main menu.`;
     } else {
       reply = `No appointments found. Reply 1 to book one.`;
     }
@@ -131,6 +172,15 @@ app.post('/whatsapp', async (req, res) => {
   else {
     sessions[phone] = { step: 'start' };
     reply = `Please reply Hi to start again.`;
+  }
+
+  // Emergency detection
+  const emergencyWords = ['emergency', 'accident', 'blood', 'unconscious', 'seizure', 'heart attack', 'suicide', 'poison', 'saans', 'suffocate', 'labour', 'delivery', 'bleeding'];
+  const isEmergency = emergencyWords.some(word => msg.toLowerCase().includes(word));
+
+  if (isEmergency) {
+    reply = `This sounds serious. Please call 112 immediately or go to the nearest hospital.\n\nFor clinic appointments only, reply Hi.`;
+    sessions[phone] = { step: 'start' };
   }
 
   res.set('Content-Type', 'text/xml');
