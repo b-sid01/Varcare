@@ -60,6 +60,23 @@ async function sendWhatsApp(to, message) {
   });
 }
 
+// NEW: Send any message to any number (used for prescription delivery)
+app.post('/send-message', async (req, res) => {
+  const { phone, message } = req.body;
+  
+  if (!phone || !message) {
+    return res.status(400).json({ error: 'Phone and message required' });
+  }
+
+  try {
+    await sendWhatsApp(phone, message);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Send message error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/whatsapp', async (req, res) => {
   const msg = req.body.Body.trim();
   const phone = req.body.From;
@@ -184,7 +201,7 @@ app.post('/whatsapp', async (req, res) => {
   }
 
   res.set('Content-Type', 'text/xml');
-  res.send(`<Response><Message>${reply}</Message></Response>`);
+  res.send(`<<Response><Message>${reply}</Message></Response>`);
 });
 
 app.post('/confirm', async (req, res) => {
